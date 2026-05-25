@@ -35,7 +35,7 @@ Schema cần có:
 - `vip_clients(chat_id text primary key)`
 - `event_logs(message_id text primary key)`
 
-File SQL có sẵn: [supabase/schema.sql](file:///c:/Users/PC/Downloads/Trae%20Trial/supabase/schema.sql)
+File SQL có sẵn: [supabase/schema.sql](supabase/schema.sql)
 
 ### Gemini
 
@@ -87,4 +87,3 @@ Copy `chatId` vào `WA_INTERNAL_NOTIFY_CHAT_ID`.
 4. Tải ngữ cảnh Jira theo label của khách.
 5. Gemini quyết định `CREATE_SUBTASK | COMMENT | IGNORE`.
 6. Thực thi Jira và gửi notify nội bộ.
-
