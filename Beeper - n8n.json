@@ -1,0 +1,959 @@
+{
+  "name": "Beeper - n8n",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "={{ $env.BEEPER_API_BASE_URL }}/v1/chats/{{ encodeURIComponent($json.chatID) }}/messages",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "20"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "ngrok-skip-browser-warning",
+              "value": "true"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.BEEPER_API_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1152,
+        80
+      ],
+      "id": "a9f54971-d114-4bb7-ab94-13f4abb381b2",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.BEEPER_API_BASE_URL }}/v1/messages/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "20"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.BEEPER_API_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "ngrok-skip-browser-warning",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        512,
+        80
+      ],
+      "id": "efadb02a-9c02-4fb9-948c-1a1e18dd14e8",
+      "name": "Search Messages"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy dữ liệu thô từ Search Messages\nconst inputData = $input.first().json;\n\n// 1. Tách dữ liệu an toàn\nconst messages = inputData.items || [];      // Danh sách tin nhắn\nconst chatMetadata = inputData.chats || {};  // Danh sách thông tin nhóm\n\nconst results = [];\n\n// 2. Duyệt qua từng tin nhắn\nfor (const msg of messages) {\n\n  // --- BỘ LỌC CƠ BẢN (ĐÃ BẬT CHO PRODUCTION) ---\n   \n  // A. Bỏ qua tin nhắn do chính mình gửi (Sam gửi)\n  // Logic: Chỉ khi Khách nhắn tin mới thì mới kích hoạt Workflow\n  if (msg.isSender === true) continue;\n\n  // B. Bỏ qua tin nhắn đã đọc (Chỉ xử lý tin mới chưa đọc)\n  // Giúp tránh việc hệ thống quét lại tin cũ mỗi lần chạy\n  if (msg.isUnread === false) continue; \n\n  const senderName = msg.senderName || \"\";\n  const chatInfo = chatMetadata[msg.chatID] || {};\n  const groupTitle = chatInfo.title || chatInfo.name || \"\";\n\n  // --- DANH SÁCH CHẶN (INTERNAL GROUPS) - QUAN TRỌNG ---\n  // Nếu tên nhóm là \"The REAL Danta\" hoặc chứa từ khóa nội bộ -> BỎ QUA NGAY\n  // Giúp tránh việc bot bắt nhầm tin nhắn của thành viên nội bộ có chữ (B) trong tên\n  if (groupTitle.includes(\"The REAL Danta\") || groupTitle.includes(\"Danta Internal\")) {\n      continue;\n  }\n\n  // --- BỘ LỌC CLIENT VIP (BẮT BUỘC CÓ \"(B)\") ---\n   \n  // Kiểm tra: Tên người gửi HOẶC Tên nhóm phải chứa \"(B)\"\n  // Ví dụ: \"Client (B) - Jay\" hoặc nhóm \"Project (B)\"\n  const isClientPerson = senderName.includes(\"(B)\");\n  const isClientGroup = groupTitle.includes(\"(B)\");\n\n  // 3. QUYẾT ĐỊNH: CHỈ CHO QUA KHÁCH HÀNG ĐÍCH THỰC\n  if (isClientPerson || isClientGroup) {\n    \n    // Ưu tiên lấy Tên Nhóm nếu là Group Client, hoặc Tên Người nếu là Khách lẻ\n    msg.finalTitle = groupTitle || senderName || \"Unknown Client (B)\"; \n    \n    // Đảm bảo chatID luôn đầy đủ\n    msg.chatID = msg.chatID || chatInfo.id;\n    \n    // Đánh dấu loại khách hàng\n    msg.clientType = \"VIP Client (B)\";\n\n    results.push({\n      json: msg\n    });\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        80
+      ],
+      "id": "53dc7ab0-414a-4cec-8b93-279a914b2c37",
+      "name": "Gather Messages",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Lấy dữ liệu từ node ngay trước đó (HTTP Request)\nconst inputData = $input.first().json;\n\n// --- ĐỒNG BỘ DỮ LIỆU TỪ GATHER MESSAGES ---\nlet originalContext = {};\ntry {\n    // Gọi ngược lại node Gather Messages để lấy metadata chuẩn\n    originalContext = $('Gather Messages').first().json;\n} catch (e) {\n    console.log(\"⚠️ Cannot find data from Gather Messages\");\n}\n\n// Ưu tiên lấy chatID từ Gather Messages vì nó đã được xử lý kỹ\nconst finalChatID = originalContext.chatID || inputData.chatID || inputData.id;\n\n// Ưu tiên lấy Tên Khách Hàng chuẩn (finalTitle) từ Gather Messages\nconst bestCustomerName = originalContext.finalTitle || inputData.title || inputData.senderName || \"Customer\";\n\n// 2. Lấy danh sách tin nhắn\nconst messages = inputData.messages || inputData.items || [];\n\n// 3. Xử lý nội dung hội thoại\nconst sortedMessages = messages.slice().reverse();\n\nlet conversationTranscript = \"\";\n\nfor (const msg of sortedMessages) {\n  if (!msg.text) continue;\n  \n  let senderRole = \"\";\n  \n  if (msg.isSender) {\n      senderRole = \"👨‍💻 Support Team (Sam)\";\n  } else {\n      senderRole = `👤 ${msg.senderName || \"Customer\"}`;\n  }\n\n  conversationTranscript += `${senderRole}: ${msg.text}\\n`;\n}\n\n// --- LOGIC MỚI: TẠO LABEL CHUẨN JIRA ---\n// Yêu cầu: Jira Label không chấp nhận khoảng trắng hay ký tự đặc biệt.\n\n// Lấy tên khách hàng làm gốc (Ví dụ: \"(B) [Jay] Phuc Nguyen\")\nconst rawName = (bestCustomerName || \"Client\").toString();\n\n// Hàm replace này sẽ xóa tất cả ký tự KHÔNG PHẢI là chữ (a-z, A-Z) hoặc số (0-9)\n// Kết quả: \"BJayPhucNguyen\"\nlet cleanLabel = rawName.replace(/[^a-zA-Z0-9]/g, \"\");\n\n// Fallback: Nếu tên khách toàn ký tự đặc biệt (VD: \"!!!\") bị xóa hết thành rỗng\n// Thì lấy ID tin nhắn làm label để đảm bảo không bị lỗi\nif (!cleanLabel || cleanLabel.length < 3) {\n    // Lấy 10 ký tự đầu của ChatID làm label dự phòng\n    const safeID = (finalChatID || \"\").toString().replace(/[^a-zA-Z0-9]/g, \"\");\n    cleanLabel = \"Client\" + safeID.substring(0, 10);\n}\n\nreturn {\n  json: {\n    conversation_history: conversationTranscript,\n    chatID: finalChatID,\n    \n    // Tên hiển thị đầy đủ (để humans đọc)\n    customerName: bestCustomerName,\n    \n    // LABEL CHUẨN JIRA (Để máy đọc/tìm kiếm)\n    // Node \"Get Open Task\" sẽ dùng biến này để tìm vé cũ\n    jiraLabel: cleanLabel,\n\n    // Giữ lại các dữ liệu khác nếu cần\n    ...inputData \n    \n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        80
+      ],
+      "id": "87138a4a-f4ea-4276-b955-f8d30add4ca9",
+      "name": "Format Chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy văn bản từ AI\nconst inputItem = $input.first();\nconst aiOutputText = inputItem ? (inputItem.json.text || \"{}\") : \"{}\";\nconst results = [];\n\nlet ticketData = {};\n\n// --- BƯỚC 1: PARSE JSON AN TOÀN ---\ntry {\n    // Làm sạch Markdown và khoảng trắng\n    const cleanJson = aiOutputText.replace(/```json/g, \"\").replace(/```/g, \"\").trim();\n    ticketData = JSON.parse(cleanJson);\n} catch (e) {\n    console.log(\"⚠️ JSON Parse lỗi nhẹ, thử dùng Regex cứu dữ liệu...\");\n    // Backup: Nếu JSON lỗi, dùng Regex để \"gắp\" trường decision\n    const decisionMatch = aiOutputText.match(/\"decision\":\\s*\"([^\"]+)\"/i);\n    if (decisionMatch) ticketData.decision = decisionMatch[1];\n}\n\n// --- BƯỚC 2: PHIÊN DỊCH LOGIC (QUAN TRỌNG NHẤT) ---\n// Chuyển đổi \"decision\" của AI thành \"is_actionable\" cho Workflow hiểu\nif (ticketData.decision) {\n    const d = ticketData.decision.toUpperCase();\n    \n    // Những quyết định này được coi là \"Cần hành động\" (Actionable)\n    if (d === 'CREATE_SUBTASK' || d === 'CREATE_PARENT' || d === 'COMMENT' || d === 'TASK') {\n        ticketData.is_actionable = true;\n    } else {\n        // IGNORE hoặc khác -> Không làm gì\n        ticketData.is_actionable = false;\n    }\n} else {\n    // Fallback: Nếu không tìm thấy decision, mặc định là false\n    if (ticketData.is_actionable === undefined) {\n        ticketData.is_actionable = false;\n    }\n}\n\n// --- BƯỚC 3: ĐỒNG BỘ DỮ LIỆU GỐC (ĐÃ SỬA LỖI TÊN KHÁCH) ---\ntry {\n    // 1. Lấy dữ liệu từ Format Chat (để lấy conversation_history)\n    const formatChatNode = $('Format Chat').first();\n    const originalData = formatChatNode ? formatChatNode.json : {};\n\n    // 2. 🔥 QUAN TRỌNG: Lấy dữ liệu từ Gather Messages (để lấy Tên Khách VIP)\n    // Vì Format Chat có thể đã làm mất trường finalTitle\n    const gatherNode = $('Gather Messages').first();\n    const gatherData = gatherNode ? gatherNode.json : {};\n\n    // Logic chọn tên thông minh nhất:\n    // Ưu tiên lấy finalTitle từ Gather Messages -> Nếu không có thì lấy senderName -> Cuối cùng mới là Customer\n    const bestCustomerName = gatherData.finalTitle || originalData.finalTitle || originalData.senderName || \"Customer\";\n\n    // Merge thông tin vào ticketData\n    ticketData.customerName = bestCustomerName;\n    ticketData.conversation_history = originalData.conversation_history; // Giữ lại lịch sử chat\n    \n    // Đảm bảo ID không bị mất\n    ticketData.chatID = originalData.chatID || gatherData.chatID;\n    ticketData.message_id = originalData.id || gatherData.id;\n\n} catch (e) {\n    console.log(\"⚠️ Không lấy được dữ liệu gốc chat: \" + e.message);\n    ticketData.customerName = \"Customer (Fallback)\";\n}\n\n// --- BƯỚC 4: OUTPUT ---\n// Chỉ đẩy ra nếu là Actionable (True)\nif (ticketData.is_actionable === true) {\n    \n    // Tự động đẩy Priority lên High nếu là Bug\n    if ((ticketData.summary && ticketData.summary.toLowerCase().includes(\"bug\")) || \n        ticketData.category === \"Bug\") {\n        ticketData.priority = \"High\";\n    }\n    \n    results.push({ json: ticketData });\n} else {\n    console.log(\"🛑 AI quyết định IGNORE (Bỏ qua) tin nhắn này.\");\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1936,
+        288
+      ],
+      "id": "5262e82c-b690-499c-860b-3dbcd7256582",
+      "name": "AI Json Parse"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=HISTORY:\n{{ $json.conversation_history }}\n\nEXISTING TASKS (CONTEXT):\n{{ $json.jira_context }}\n\n### ROLE\nYou are the AdminOps Assistant for DantaLabs.\nYour Goal: Detect new tasks vs. duplicates and assign the CORRECT JIRA ID.\n\n### LOGIC FLOW (PRIORITY)\n\n**STEP 1: CHECK FOR NEW TOPIC**\n- Compare the User's Request vs. `EXISTING TASKS`.\n- **NEW TOPIC RULE:** If the user talks about a Project, Feature, or Bug that is **NOT** explicitly mentioned in the list -> Decision: **\"CREATE_SUBTASK\"**.\n  - *Example:* List has \"KPMG Meeting\". User asks \"Fix Website Bug\". -> **CREATE_SUBTASK**.\n  - *Example:* List has \"KPMG Meeting\". User asks \"Add Migration to KPMG\". -> **CREATE_SUBTASK** (Migration is a new scope).\n\n**STEP 2: CHECK FOR DUPLICATES**\n- **SAME TOPIC RULE:** Only if the user discusses the **EXACT SAME** thing (e.g., rescheduling the *same* meeting, asking status of *same* bug) -> Decision: **\"COMMENT\"**.\n\n**STEP 3: ASSIGNMENT (CRITICAL - USE EXACT IDs)**\nYou MUST use these exact IDs. Do not output names like \"Sam\".\n\n1. **Dani (Tech/Dev/Bugs):**\n   ID: `712020:d53c1da1-3606-4a2d-a7e9-2463df50bda2`\n   - Scope: Coding, Bugs, Migration, Website, Technical issues.\n\n2. **Sam (Biz/Schedule):**\n   ID: `70121:f9c9bf2a-4653-40a0-aaa6-c0a68e662d91`\n   - Scope: Meetings, Scheduling, Strategy, Pricing, General questions.\n\n3. **Jay (Internal Ops):**\n   ID: `712020:05ad2775-5008-401e-9737-ed7bb73a2c90`\n   - Scope: Internal Tools maintenance only (Rarely used).\n\n**STEP 4: CONTENT GENERATION (CRITICAL FOR COMMENTS)**\n- If Decision is **\"COMMENT\"**:\n  - **summary**: Generate a ONE-SENTENCE summary of the update (e.g., \"Client rescheduled meeting to 7PM\").\n  - **description**: Provide a **Detailed Insight/Analysis**. What changed? What is the tone? What is the key takeaway? (Do NOT just copy the chat log).\n  - **suggested_solution**: What should the assignee do next? (e.g., \"Update Calendar\", \"Reply to client\").\n\n### OUTPUT JSON\n{\n  \"decision\": \"CREATE_SUBTASK\" | \"COMMENT\" | \"IGNORE\",\n  \"reason\": \"String (e.g., 'New topic: Website Migration is not in existing tasks')\",\n  \"target_issue_key\": \"String (Master Key if COMMENT, else null)\",\n  \"summary\": \"String (For Subtask: Task Title. For Comment: Short Update Summary)\",\n  \"description\": \"String (For Subtask: Full Context. For Comment: Analysis & Insight)\",\n  \"priority\": \"Medium\",\n  \"assignee_id\": \"String (MUST BE ONE OF THE IDs ABOVE, NOT A NAME)\",\n  \"meeting_time\": \"ISO String or null\",\n  \"suggested_solution\": \"String\"\n}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        1680,
+        288
+      ],
+      "id": "d3a6ce16-69c1-49a8-9e36-c7804f243fe1",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3-flash-preview",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        496
+      ],
+      "id": "b1f5e0a7-72b1-48be-b568-7a9a3c7a3e13",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "__REDACTED_GOOGLE_GEMINI_CREDENTIAL_ID__",
+          "name": "Google Gemini Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/__REDACTED_SHEET_ID__/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Trang tính1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/__REDACTED_SHEET_ID__/edit#gid=0"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "=message_id",
+              "lookupValue": "={{ $json.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        816,
+        80
+      ],
+      "id": "8fc4a641-b437-44a7-8e8b-2eee52c59f85",
+      "name": "Get row(s) in sheet",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__REDACTED_GOOGLE_SHEETS_CREDENTIAL_ID__",
+          "name": "Google Sheets Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. TẠO DANH SÁCH ĐEN (BLACKLIST)\n// Lấy tất cả message_id tìm thấy trong Sheet và chuyển thành Chuỗi (String)\nconst foundIds = $input.all()\n    .map(item => item.json.message_id) // Lấy cột message_id\n    .filter(id => id) // Lọc bỏ các dòng rỗng (nếu có)\n    .map(id => id.toString().trim()); // QUAN TRỌNG: Chuyển thành chuỗi và xóa khoảng trắng thừa\n\n// 2. LẤY DANH SÁCH TIN NHẮN GỐC\nconst allOriginalMsgs = $('Gather Messages').all();\n\nconst newMessages = [];\n\n// 3. DUYỆT VÀ SO SÁNH\nfor (const msgItem of allOriginalMsgs) {\n    const msg = msgItem.json;\n    \n    // Chuyển ID tin nhắn gốc thành chuỗi để so sánh tương xứng\n    // (Dùng msg.id hoặc msg.chatID tùy vào cột bạn lưu trong sheet là gì)\n    // Ở đây tôi dùng msg.id theo ảnh của bạn\n    const msgIdToCheck = (msg.id || \"\").toString().trim();\n\n    // 4. KIỂM TRA\n    if (foundIds.includes(msgIdToCheck)) {\n        // Nếu tìm thấy trong danh sách đen -> TRÙNG -> BỎ QUA\n        // (Không làm gì cả)\n    } else {\n        // Nếu không tìm thấy -> TIN MỚI -> LẤY\n        newMessages.push({\n            json: msg\n        });\n    }\n}\n\n// 5. Trả về danh sách tin mới hoàn toàn\nreturn newMessages;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        80
+      ],
+      "id": "1161adca-374f-41ca-bca9-e2b37182b106",
+      "name": "Check if the Message is Processed or not1",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst tasks = [];\nconst meetings = [];\n\nfor (const item of items) {\n    const aiData = item.json;\n\n    if (aiData.is_actionable) {\n        // Luôn luôn tạo Jira Ticket\n        tasks.push({ json: aiData });\n        \n        // Nếu có meeting_time -> Đẩy thêm vào danh sách tạo Lịch\n        if (aiData.meeting_time && aiData.meeting_time !== null) {\n            meetings.push({ json: aiData }); \n            // Lưu ý: Logic này ở đây đang minh họa. \n            // Trong n8n, tốt nhất là cho luồng chạy thẳng: Jira -> Google Calendar\n        }\n    }\n}\n\nreturn tasks; \n// Bạn cứ để nó chạy thẳng sang Jira.\n// Sau node Jira, bạn nối tiếp vào node Google Calendar.\n// Tại node Calendar, bạn click vào Settings (bánh răng) -> \"Continue On Fail\" (để nếu không có giờ, nó lỗi thì workflow vẫn chạy tiếp)."
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        288
+      ],
+      "id": "ac99ad5a-b8ae-4968-a541-6ade9801b836",
+      "name": "Check if Actionable"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "__REDACTED_CALENDAR_ID__",
+          "mode": "list",
+          "cachedResultName": "Calendar (redacted)"
+        },
+        "start": "={{ $('Check if Actionable').first().json.meeting_time }}",
+        "end": "={{ DateTime.fromISO($('Check if Actionable').first().json.meeting_time).plus({ hours: 1 }).toISO() }}",
+        "additionalFields": {
+          "attendees": [
+            "__REDACTED_ATTENDEE_1__",
+            "__REDACTED_ATTENDEE_2__"
+          ],
+          "description": "=Context: {{ $('Check if Actionable').first().json.description }}\n\nProposed by: AdminOps AI\n\nJira Ticket: {{ $json.key }}  <-- Cái này giữ nguyên $json vì nó lấy từ Jira (node liền trước)\n",
+          "summary": "=[Client Meeting] {{ $('Check if Actionable').first().json.summary }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        3472,
+        400
+      ],
+      "id": "7060d798-6803-48b5-9d4e-5d982ad0bba1",
+      "name": "Create an event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__REDACTED_GOOGLE_CALENDAR_CREDENTIAL_ID__",
+          "name": "Google Calendar Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/__REDACTED_SHEET_ID__/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Trang tính1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/__REDACTED_SHEET_ID__/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $('Filter: Only Subtask.').item.json.message_id }}",
+            "content": "={{ $('Filter: Only Subtask.').item.json.text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "content",
+              "displayName": "content",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3696,
+        96
+      ],
+      "id": "4191c053-f7a2-4e7e-9c52-48784d8ff762",
+      "name": "Save Conversation ID - Prevent dupliacating tickets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__REDACTED_GOOGLE_SHEETS_CREDENTIAL_ID__",
+          "name": "Google Sheets Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- CẤU HÌNH: Mode \"Run Once for All Items\" ---\n\nconst aiInput = $input.first();\nconst aiData = aiInput ? aiInput.json : {};\n\n// Lấy dữ liệu vệ tinh\nconst gatherNode = $('Gather Messages').first(); \nconst gatherData = gatherNode ? gatherNode.json : {};\nconst chatNode = $('Format Chat').first();\nconst chatData = chatNode ? chatNode.json : {};\n\n// 2. Lấy danh sách Jira\nlet jiraData = [];\ntry {\n    jiraData = $('Get Open Task').all();\n} catch (e) { }\n\n// LOGIC TÌM MASTER TICKET (CHUẨN 100%)\n// Master Ticket là vé KHÔNG CÓ trường 'parent'.\n// Subtask luôn có trường 'parent' trỏ về Master.\nlet masterTicketJson = null;\n\nif (jiraData.length > 0) {\n    const foundMaster = jiraData.find(item => {\n        const fields = item.json.fields;\n        // Logic: Có fields VÀ (Không có parent HOẶC parent bằng null)\n        return fields && (!fields.parent);\n    });\n    \n    if (foundMaster) {\n        masterTicketJson = foundMaster.json;\n    }\n}\n\nconst hasMaster = !!masterTicketJson;\n\n// 3. Xác định hướng đi\nlet destination = '';\nlet operation = '';\nconst aiDecision = (aiData.decision || '').toUpperCase();\n\nif (hasMaster) {\n    // === ĐÃ CÓ VÉ MASTER ===\n    // Nếu AI bảo tạo Subtask -> OK, làm luôn.\n    if (aiDecision === 'CREATE_SUBTASK' || aiDecision === 'TASK' || aiDecision === 'CREATE_PARENT') {\n        destination = 'SUBTASK';\n        operation = 'CREATE_SUBTASK';\n    } else {\n        destination = 'COMMENT';\n        operation = 'ADD_COMMENT';\n    }\n} else {\n    // === CHƯA CÓ VÉ MASTER ===\n    // Bắt buộc phải tạo Master trước\n    destination = 'PARENT_ONLY';\n    operation = 'CREATE_PARENT';\n}\n\n// 4. Chuẩn bị Output\nconst outputJson = {\n    ...aiData,\n    ...gatherData, \n    ...chatData, \n    \n    final_message_id: gatherData.id || \"unknown_id\",\n    final_content: gatherData.text || \"\",\n    customerName: chatData.customerName || gatherData.finalTitle, \n    \n    // Key này luôn luôn đúng là Master Ticket\n    parentKey: hasMaster ? masterTicketJson.key : undefined,\n    parentId: hasMaster ? masterTicketJson.id : undefined,\n    \n    route_destination: destination,\n    operation: operation\n};\n\nreturn [{ json: outputJson }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        288
+      ],
+      "id": "9086d2ed-b5a2-4548-8f0a-bb6b62ac1f57",
+      "name": "Route: Parent vs Subtask.",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy dữ liệu từ Router\nconst items = $input.all();\n\n// SỬA LỖI: Lọc theo quyết định của Router (route_destination) \n// thay vì quyết định của AI (decision)\nconst parentItems = items.filter(item => item.json.route_destination === 'PARENT_ONLY');\n\nreturn parentItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2368,
+        64
+      ],
+      "id": "374f28f2-db66-45dd-8784-07ebcb6c6dfb",
+      "name": "Filter: Parent Only"
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "10236",
+          "mode": "list",
+          "cachedResultName": "Project Workspace"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "10259",
+          "mode": "list",
+          "cachedResultName": "Task"
+        },
+        "summary": "=[Master] {{ $json.customerName }} - Support Ticket",
+        "additionalFields": {
+          "description": "=h3. Client Master Ticket\nThis ticket keeps track requests from client: {{ $json.customerName }}\n\n*Chat ID:* {{ $json.jiraLabel }}\n*Created:* {{ $now }}",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": {
+                  "__rl": true,
+                  "value": "customfield_10239",
+                  "mode": "list",
+                  "cachedResultName": "Sender Name"
+                },
+                "fieldValue": "={{ $json.customerName }}"
+              }
+            ]
+          },
+          "labels": "={{ $json.jiraLabel.split(' ') }}",
+          "parentIssueKey": "="
+        }
+      },
+      "id": "2aa9c0ca-ec60-4115-a5e5-337651db3f50",
+      "name": "Create an issue (Master Ticket)",
+      "type": "n8n-nodes-base.jira",
+      "position": [
+        2560,
+        64
+      ],
+      "executeOnce": false,
+      "retryOnFail": false,
+      "typeVersion": 1,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "__REDACTED_JIRA_CREDENTIAL_ID__",
+          "name": "Jira Cloud Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy dữ liệu từ Router\nconst items = $input.all();\n\n// SỬA LỖI: Cho phép đi qua nếu đích đến là SUBTASK hoặc COMMENT\n// (Tức là Router đã tìm thấy vé Master cũ)\nreturn items.filter(item => \n    item.json.route_destination === 'SUBTASK' || \n    item.json.route_destination === 'COMMENT'\n);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2368,
+        512
+      ],
+      "id": "5e0288f4-142d-4fa0-a28e-e8c753961b67",
+      "name": "Filter: Child Ops"
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "10236",
+          "mode": "list",
+          "cachedResultName": "Project Workspace"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "10260",
+          "mode": "list",
+          "cachedResultName": "Sub-task"
+        },
+        "summary": "={{ $json.summary }}",
+        "additionalFields": {
+          "assignee": {
+            "__rl": true,
+            "value": "={{ $json.assignee_id }}",
+            "mode": "id"
+          },
+          "description": "={{\n(() => {\n    // 1. TẠO TỪ ĐIỂN MAPPING ID -> NAME\n    const assigneeMap = {\n        \"712020:d53c1da1-3606-4a2d-a7e9-2463df50bda2\": \"Dani\",\n        \"70121:f9c9bf2a-4653-40a0-aaa6-c0a68e662d91\": \"Sam\",\n        \"712020:05ad2775-5008-401e-9737-ed7bb73a2c90\": \"Jay\"\n    };\n\n    // Lấy ID hiện tại\n    const currentID = $json.assignee_id || \"70121:f9c9bf2a-4653-40a0-aaa6-c0a68e662d91\";\n\n    // Dịch sang tên người\n    const assigneeName = assigneeMap[currentID] || \"Unknown Member\";\n\n    // 2. TRẢ VỀ NỘI DUNG FORMAT ĐẸP\n    return `h3. 📄 Context\n${$json.description}\n\nh3. 🧠 AI Suggested Solution\n{panel:title=Action Plan|borderColor=#ccc|titleBGColor=#f4f5f7}\n${$json.suggested_solution}\n{panel}\n\n----\nh4. ℹ️ Meta Info\n* **👤 Assignee:** ${assigneeName}\n* **📅 Meeting:** ${$json.meeting_time ? $json.meeting_time : \"No meeting scheduled\"}\n* **🔗 Original Chat:** [View Log|${$json.jiraLabel}]`;\n})()\n}}",
+          "labels": "={{ $json.jiraLabel.split(' ') }}",
+          "parentIssueKey": "={{ $json.parentKey }}"
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2672,
+        400
+      ],
+      "id": "83b4f866-91c5-4cec-ae3f-4cbc23ee43bc",
+      "name": "Create Subtask",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "__REDACTED_JIRA_CREDENTIAL_ID__",
+          "name": "Jira Cloud Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "issueComment",
+        "issueKey": "={{ $json.parentKey }}",
+        "comment": "={{ $('Prepare Comment').first().json.comment_content }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        3152,
+        848
+      ],
+      "id": "36ebd2a2-a8b6-4ed5-89a5-78f42a7a6e6f",
+      "name": "Add a comment",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "__REDACTED_JIRA_CREDENTIAL_ID__",
+          "name": "Jira Cloud Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy tất cả dữ liệu đầu vào\nconst items = $input.all();\n\n// Chỉ giữ lại những item có operation là 'CREATE_SUBTASK'\nreturn items.filter(item => item.json.operation === 'CREATE_SUBTASK');"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2512,
+        400
+      ],
+      "id": "5b467281-f736-4135-aded-ffb2bfbc6682",
+      "name": "Filter: Only Subtask."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy tất cả dữ liệu đầu vào\nconst items = $input.all();\n\n// Chỉ giữ lại những item có operation là 'ADD_COMMENT'\nreturn items.filter(item => item.json.operation === 'ADD_COMMENT');"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        848
+      ],
+      "id": "00e75f94-6fd8-4939-b99a-a1cf1b1d32c5",
+      "name": "Filter: Only Comment"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy dữ liệu từ Node Jira vừa chạy xong (để chuyển tiếp cho Calendar nếu OK)\nconst jiraItems = $input.all();\n\nlet meetingTime = null;\n\ntry {\n    // Kỹ thuật \"Nhảy cóc\": Lấy lại dữ liệu meeting_time từ node AI Json Parse\n    // $('AI Json Parse') giúp truy cập dữ liệu gốc dù đã qua node Jira\n    const aiData = $('AI Json Parse').first().json;\n    meetingTime = aiData.meeting_time;\n} catch (e) {\n    console.log(\"⚠️ Không tìm thấy dữ liệu meeting_time.\");\n}\n\n// LOGIC CÔNG TẮC ĐÓNG/NGẮT:\n// 1. Kiểm tra xem có giờ họp không? (Khác null, khác rỗng, khác chuỗi \"null\")\nif (meetingTime && meetingTime !== null && meetingTime !== \"null\") {\n    // ✅ CÓ GIỜ -> Trả về data để kích hoạt node Calendar chạy\n    return jiraItems; \n} else {\n    // ⛔ KHÔNG CÓ GIỜ -> Trả về mảng rỗng -> Node Calendar sẽ KHÔNG CHẠY\n    return []; \n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3056,
+        400
+      ],
+      "id": "0dd6a4c4-10e0-4a8a-9365-84f3cf02ffcf",
+      "name": "Check before create Calendar event"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3504,
+        80
+      ],
+      "id": "88f7fd5e-1f5d-465e-83b7-34b424aef2f5",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "const issues = $input.all();\n// Lấy dữ liệu chat từ node Format Chat (để đảm bảo không mất context nếu issues rỗng)\nconst chatData = $('Format Chat').first().json;\n\n// Nếu không tìm thấy ticket nào\nif (issues.length === 0 || !issues[0].json.key) {\n  return { \n    json: { \n      ...chatData, \n      jira_context: \"No existing open tasks.\" \n    } \n  };\n}\n\n// Tạo danh sách tóm tắt để AI đọc\n// CẬP NHẬT: Thêm [Loại Vé] vào trước để AI phân biệt đâu là Master, đâu là Subtask\nconst summaryList = issues.map(i => {\n  const key = i.json.key;\n  const summary = i.json.fields.summary;\n  const status = i.json.fields.status.name;\n  \n  // Lấy loại vé (Task, Sub-task, Bug...)\n  const type = i.json.fields.issuetype ? i.json.fields.issuetype.name : \"Unknown\";\n  \n  return `- [${type}] [${key}] ${summary} (Status: ${status})`;\n}).join(\"\\n\");\n\nreturn { \n  json: { \n    ...chatData, // Giữ lại data chat\n    jira_context: summaryList \n  } \n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        80
+      ],
+      "id": "f17de4b6-cdf5-4ce3-8804-42b31e6673f6",
+      "name": "Prepare Context"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": true,
+        "options": {
+          "jql": "=labels = \"{{ $('Format Chat').first().json.jiraLabel }}\""
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        80
+      ],
+      "id": "96dda7f5-2421-4d5e-93ff-ed70a1bc1727",
+      "name": "Get Open Task",
+      "alwaysOutputData": true,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "__REDACTED_JIRA_CREDENTIAL_ID__",
+          "name": "Jira Cloud Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Lấy dữ liệu an toàn từ các node trước\nconst aiItem = $('AI Json Parse').first();\nconst aiData = aiItem ? aiItem.json : {};\n\n// QUAN TRỌNG: Lấy dữ liệu đầu vào hiện tại (để giữ lại Key/ID của vé)\nconst inputData = $input.first().json;\n\n// Lấy lịch sử chat (Có kiểm tra lỗi để không bị crash)\nlet chatHistory = \"No chat history available.\";\ntry {\n    const formatNode = $('Format Chat').first();\n    if (formatNode) {\n        chatHistory = formatNode.json.conversation_history;\n    } else {\n        // Fallback lấy từ input hiện tại nếu không tìm thấy node Format Chat\n        chatHistory = inputData.conversation_history || \"No chat history available.\";\n    }\n} catch (e) {}\n\n// 2. Soạn nội dung (Template String)\nconst summary = aiData.summary || \"New Update\";\nconst description = aiData.description || \"No details provided.\";\nconst solution = aiData.suggested_solution || \"Review the update.\";\n\n// Format chuẩn Jira Wiki Markup\nconst finalContent = `h3. 📣 Update: ${summary}\n\nh4. 🧠 AI Analysis & Insight\n${description}\n\n{panel:title=Action Required|borderColor=#deebff|titleBGColor=#deebff|bgColor=#ffffff}\n*Action:* ${solution}\n{panel}\n\n----\n{color:#6b778c}_Original Chat Log:_{color}\n{quote}\n${chatHistory}\n{quote}`;\n\n// 3. Trả về kết quả (MERGE dữ liệu cũ + nội dung mới)\nreturn {\n    json: {\n        ...inputData,       // <--- Giữ lại toàn bộ Key, ParentKey, ID từ node trước\n        comment_content: finalContent\n    }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2656,
+        848
+      ],
+      "id": "ab22879a-ba95-4b75-bc85-22129e2cd3d0",
+      "name": "Prepare Comment"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Lấy dữ liệu từ các node trước\nconst aiData = $('AI Json Parse').first().json;\nconst jiraData = $('Create Subtask').first().json; \n\n// 2. Mapping tên Assignee\nconst assigneeMap = {\n    \"712020:d53c1da1-3606-4a2d-a7e9-2463df50bda2\": \"Dani\",\n    \"70121:f9c9bf2a-4653-40a0-aaa6-c0a68e662d91\": \"Sam\",\n    \"712020:05ad2775-5008-401e-9737-ed7bb73a2c90\": \"Jay\"\n};\n\n// Lấy ID người được giao (Ưu tiên từ AI nếu Jira chưa kịp trả về)\nconst assigneeID = aiData.assignee_id || jiraData.fields?.assignee?.accountId;\nconst assigneeName = assigneeMap[assigneeID] || \"Team\";\n\n// 3. Xử lý tên Task (Lấy từ AI vì node Create Subtask thường không trả về tên ngay)\nconst taskTitle = aiData.summary || \"New Task\";\n\n// 4. Tạo nội dung tin nhắn\nconst message = `🚀 *NEW SUBTASK CREATED*\\n\\n` +\n       `📌 *Task:* ${taskTitle}\\n` +\n       `👤 *Assignee:* ${assigneeName}\\n` +\n       `🔑 *Key:* ${jiraData.key}\\n` +\n       `🔗 *Link:* https://your-jira-domain.atlassian.net/browse/${jiraData.key}\\n\\n` +\n       `💡 *AI Suggestion:* ${aiData.suggested_solution}`;\n\n// 5. TRẢ VỀ OBJECT JSON HOÀN CHỈNH\nreturn {\n    json: {\n        \"chatId\": \"__REDACTED_TEAM_CHAT_ID__\",\n        \"text\": message\n    }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2944,
+        640
+      ],
+      "id": "445963e6-b1e0-4a28-8484-7dba98956ddb",
+      "name": "Prepare Notification"
+    },
+    {
+      "parameters": {
+        "operation": "group",
+        "message": "={{ $json.text }}",
+        "groupId": "__REDACTED_GROUP_ID__"
+      },
+      "type": "n8n-nodes-syncmate.whatsAuto",
+      "typeVersion": 1,
+      "position": [
+        3216,
+        640
+      ],
+      "id": "9a097d4c-2373-4676-a0ed-3d46ef20643c",
+      "name": "Notify Team",
+      "credentials": {
+        "assistroTokenApi": {
+          "id": "__REDACTED_ASSISTRO_CREDENTIAL_ID__",
+          "name": "Assistro Credential (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        320,
+        80
+      ],
+      "id": "801b0879-1503-454c-b07f-f6f9d84f25a9",
+      "name": "Schedule Trigger"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Search Messages": {
+      "main": [
+        [
+          {
+            "node": "Gather Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gather Messages": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Format Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Chat": {
+      "main": [
+        [
+          {
+            "node": "Get Open Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Json Parse": {
+      "main": [
+        [
+          {
+            "node": "Check if Actionable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "AI Json Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Check if the Message is Processed or not1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if the Message is Processed or not1": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Actionable": {
+      "main": [
+        [
+          {
+            "node": "Route: Parent vs Subtask.",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event": {
+      "main": [
+        []
+      ]
+    },
+    "Save Conversation ID - Prevent dupliacating tickets": {
+      "main": [
+        []
+      ]
+    },
+    "Route: Parent vs Subtask.": {
+      "main": [
+        [
+          {
+            "node": "Filter: Parent Only",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter: Child Ops",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Parent Only": {
+      "main": [
+        [
+          {
+            "node": "Create an issue (Master Ticket)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an issue (Master Ticket)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Child Ops": {
+      "main": [
+        [
+          {
+            "node": "Filter: Only Subtask.",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter: Only Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Subtask": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          },
+          {
+            "node": "Check before create Calendar event",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Only Subtask.": {
+      "main": [
+        [
+          {
+            "node": "Create Subtask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Only Comment": {
+      "main": [
+        [
+          {
+            "node": "Prepare Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check before create Calendar event": {
+      "main": [
+        [
+          {
+            "node": "Create an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add a comment": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Save Conversation ID - Prevent dupliacating tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Open Task": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Comment": {
+      "main": [
+        [
+          {
+            "node": "Add a comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Notification": {
+      "main": [
+        [
+          {
+            "node": "Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Search Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "__REDACTED_ERROR_WORKFLOW_ID__"
+  },
+  "versionId": "a03fcf3b-a48e-4021-81d5-b3e3c12cfdf0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "__REDACTED_INSTANCE_ID__"
+  },
+  "id": "hr21snc79Efbu7lp",
+  "tags": []
+}

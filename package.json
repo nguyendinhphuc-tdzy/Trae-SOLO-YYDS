@@ -1,0 +1,24 @@
+{
+  "name": "migrate-n8n-to-node-render",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "smoke": "node index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.0",
+    "@supabase/supabase-js": "^2.50.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "nodemailer": "^6.10.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.31.2"
+  }
+}
