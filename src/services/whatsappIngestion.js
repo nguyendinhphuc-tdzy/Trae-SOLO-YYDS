@@ -126,7 +126,7 @@ function startWhatsAppIngestion(options) {
   );
 
   client.on("message", async (message) => {
-    if (message?.fromMe) return;
+    const fromMe = Boolean(message?.fromMe);
     try {
       const chat = await message.getChat();
       const chatId = safeToString(message?.from).trim();
@@ -139,6 +139,7 @@ function startWhatsAppIngestion(options) {
         });
       }
     } catch {}
+    if (fromMe) return;
     const event = await normalizeMessage(message);
     if (!event) return;
     if (!event.text) return;

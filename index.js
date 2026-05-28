@@ -32,10 +32,26 @@ function safeToString(value) {
 }
 
 function logError(type, error, context = {}) {
+  const status = error?.response?.status;
+  const responseData = error?.response?.data;
+  const responseText =
+    typeof responseData === "string"
+      ? responseData.slice(0, 1000)
+      : responseData
+        ? JSON.stringify(responseData).slice(0, 1000)
+        : "";
+
+  const requestUrl = safeToString(error?.config?.url).slice(0, 300);
+  const requestMethod = safeToString(error?.config?.method).slice(0, 20);
+
   const payload = {
     type,
     message: safeToString(error?.message).slice(0, 500),
     name: safeToString(error?.name).slice(0, 100),
+    ...(status ? { status } : {}),
+    ...(responseText ? { response: responseText } : {}),
+    ...(requestUrl ? { requestUrl } : {}),
+    ...(requestMethod ? { requestMethod } : {}),
     ...context,
   };
   console.error(JSON.stringify(payload));
@@ -44,6 +60,10 @@ function logError(type, error, context = {}) {
 const jiraService = createJiraService();
 let waNotifyService = createWhatsAppNotifyService();
 const gmailService = createGmailService();
+
+const vipMode = safeToString(process.env.VIP_MODE).trim().toLowerCase() || "strict";
+const isVipClientForIngestion =
+  vipMode === "allow_all" ? async () => true : isVipClient;
 
 async function processInboundMessage(event) {
   const messageId = safeToString(event?.messageId).trim();
@@ -161,7 +181,7 @@ async function processInboundMessage(event) {
 try {
   const { client } = startWhatsAppIngestion({
     authPath: process.env.WA_AUTH_PATH,
-    isVipClient,
+    isVipClient: isVipClientForIngestion,
     shouldContinueForMessageId,
     onEvent: processInboundMessage,
   });

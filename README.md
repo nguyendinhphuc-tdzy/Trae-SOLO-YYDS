@@ -21,6 +21,8 @@ copy .env.example .env
 
 ## Cấu hình bắt buộc (.env)
 
+- `VIP_MODE` (tuỳ chọn): `strict` (mặc định) hoặc `allow_all` (mode test)
+
 ### WhatsApp
 
 - `WA_AUTH_PATH` (vd: `.wwebjs_auth`)
@@ -48,9 +50,9 @@ File SQL có sẵn: [supabase/schema.sql](supabase/schema.sql)
 - `JIRA_EMAIL`
 - `JIRA_API_TOKEN`
 - `JIRA_PROJECT_KEY`
-- `JIRA_ASSIGNEE_DANI_ID`
-- `JIRA_ASSIGNEE_SAM_ID`
-- `JIRA_ASSIGNEE_JAY_ID`
+- `JIRA_ASSIGNEE_Phuc_ID`
+- `JIRA_ASSIGNEE_Tram_ID`
+- `JIRA_ASSIGNEE_Vy_ID`
 
 ## Cấu hình tuỳ chọn (Gmail notify)
 
@@ -82,7 +84,7 @@ Copy `chatId` vào `WA_INTERNAL_NOTIFY_CHAT_ID`.
 ## Luồng xử lý
 
 1. Ingest tin nhắn WhatsApp (bỏ qua message tự gửi).
-2. Chỉ xử lý nếu chat nằm trong `vip_clients`.
+2. Chỉ xử lý nếu chat nằm trong `vip_clients` (trừ khi `VIP_MODE=allow_all`).
 3. Chống trùng message theo `event_logs.message_id`.
 4. Tải ngữ cảnh Jira theo label của khách.
 5. Gemini quyết định `CREATE_SUBTASK | COMMENT | IGNORE`.

@@ -1,13 +1,16 @@
-const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-
 const DECISION_ALLOW_LIST = new Set(["CREATE_SUBTASK", "COMMENT", "IGNORE"]);
 const PRIORITY_ALLOW_LIST = new Set(["High", "Medium"]);
 
+function getGeminiModelFromEnv() {
+  const name = normalizeString(process.env.GEMINI_MODEL);
+  return name || "gemini-3-flash-preview";
+}
+
 function getAssigneeAllowListFromEnv() {
   return [
-    process.env.JIRA_ASSIGNEE_DANI_ID,
-    process.env.JIRA_ASSIGNEE_SAM_ID,
-    process.env.JIRA_ASSIGNEE_JAY_ID,
+    process.env.JIRA_ASSIGNEE_Phuc_ID,
+    process.env.JIRA_ASSIGNEE_Tram_ID,
+    process.env.JIRA_ASSIGNEE_Vy_ID,
   ].filter(Boolean);
 }
 
@@ -269,7 +272,7 @@ async function callGemini({ apiKey, modelName, prompt }) {
 
 async function getAiDecision({ chatTranscript, jiraContext }) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const modelName = DEFAULT_GEMINI_MODEL;
+  const modelName = getGeminiModelFromEnv();
   const assigneeAllowList = getAssigneeAllowListFromEnv();
 
   if (!apiKey) {
@@ -286,9 +289,13 @@ async function getAiDecision({ chatTranscript, jiraContext }) {
   try {
     rawText = await callGemini({ apiKey, modelName, prompt });
   } catch (error) {
+    const errorMessage = normalizeString(error?.message).slice(0, 500);
     return {
       decisionPayload: safeIgnore({ reason: "GEMINI_CALL_FAILED", assigneeAllowList }),
-      error: { type: "AI_CALL_ERROR", message: "Gemini call failed" },
+      error: {
+        type: "AI_CALL_ERROR",
+        message: errorMessage || "Gemini call failed",
+      },
       rawText: "",
     };
   }

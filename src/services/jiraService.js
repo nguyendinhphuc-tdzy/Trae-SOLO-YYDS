@@ -108,13 +108,24 @@ function createJiraService(config = {}) {
     if (!label) throw new Error('label is required');
 
     const jql = `labels = "${label}" AND statusCategory != Done ORDER BY created DESC`;
-    const res = await client.get('/search', {
-      params: {
-        jql,
-        maxResults: 20,
-        fields: 'summary,status,issuetype,parent',
-      },
-    });
+    let res;
+    try {
+      res = await client.get('/search/jql', {
+        params: {
+          jql,
+          maxResults: 20,
+          fields: 'summary,status,issuetype,parent',
+        },
+      });
+    } catch (error) {
+      res = await client.get('/search', {
+        params: {
+          jql,
+          maxResults: 20,
+          fields: 'summary,status,issuetype,parent',
+        },
+      });
+    }
 
     return Array.isArray(res.data?.issues) ? res.data.issues : [];
   }

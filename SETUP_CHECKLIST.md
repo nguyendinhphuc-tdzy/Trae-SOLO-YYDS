@@ -59,9 +59,9 @@ Atlassian account → Security → API tokens → Create token.
 ### 2.2 Lấy accountId assignee
 
 Bạn cần 3 accountId tương ứng với:
-- `JIRA_ASSIGNEE_DANI_ID`
-- `JIRA_ASSIGNEE_SAM_ID`
-- `JIRA_ASSIGNEE_JAY_ID`
+- `JIRA_ASSIGNEE_Phuc_ID`
+- `JIRA_ASSIGNEE_Tram_ID`
+- `JIRA_ASSIGNEE_Vy_ID`
 
 Cách phổ biến: trong Jira, mở profile user hoặc gọi API `/rest/api/3/user/search?query=email` bằng curl/Postman.
 
@@ -112,11 +112,10 @@ npm start
 
 ## 8) Kịch bản test end-to-end (khuyến nghị)
 
-1) Đảm bảo chatId khách đã nằm trong `vip_clients`
+1) Đảm bảo chatId khách đã nằm trong `vip_clients` (hoặc set `VIP_MODE=allow_all` để test nhanh)
 2) Nhắn một yêu cầu mới từ khách
 3) Kết quả mong đợi:
    - Jira có master ticket cho khách (nếu chưa có)
    - Nếu AI quyết định tạo việc mới → có subtask mới
    - Nhóm nội bộ nhận notify WhatsApp khi có subtask mới
    - Gmail nhận notify nếu bạn bật
-
