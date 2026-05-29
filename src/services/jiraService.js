@@ -81,12 +81,13 @@ function buildCommentText(decisionPayload, chatTranscript) {
 }
 
 function createJiraService(config = {}) {
-  const baseUrl = normalizeBaseUrl(config.baseUrl || process.env.JIRA_BASE_URL);
-  const email = config.email || process.env.JIRA_EMAIL;
-  const apiToken = config.apiToken || process.env.JIRA_API_TOKEN;
-  const projectKey = config.projectKey || process.env.JIRA_PROJECT_KEY;
-  const parentIssueType = config.parentIssueType || process.env.JIRA_PARENT_ISSUE_TYPE || 'Task';
-  const subtaskIssueType = config.subtaskIssueType || process.env.JIRA_SUBTASK_ISSUE_TYPE || 'Sub-task';
+  // Thêm .trim() vào toàn bộ biến môi trường để diệt ký tự ẩn \r trên Windows
+  const baseUrl = normalizeBaseUrl(config.baseUrl || process.env.JIRA_BASE_URL).trim();
+  const email = (config.email || process.env.JIRA_EMAIL || '').trim();
+  const apiToken = (config.apiToken || process.env.JIRA_API_TOKEN || '').trim();
+  const projectKey = (config.projectKey || process.env.JIRA_PROJECT_KEY || '').trim();
+  const parentIssueType = (config.parentIssueType || process.env.JIRA_PARENT_ISSUE_TYPE || 'Task').trim();
+  const subtaskIssueType = (config.subtaskIssueType || process.env.JIRA_SUBTASK_ISSUE_TYPE || 'Sub-task').trim();
 
   if (!baseUrl) throw new Error('Missing JIRA_BASE_URL');
   if (!email) throw new Error('Missing JIRA_EMAIL');
@@ -103,7 +104,6 @@ function createJiraService(config = {}) {
     },
     timeout: 30_000,
   });
-
   async function getOpenIssuesByLabel(label) {
     if (!label) throw new Error('label is required');
 

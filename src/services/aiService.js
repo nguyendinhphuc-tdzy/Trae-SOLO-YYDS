@@ -1,4 +1,4 @@
-const DECISION_ALLOW_LIST = new Set(["CREATE_SUBTASK", "COMMENT", "IGNORE"]);
+const DECISION_ALLOW_LIST = new Set(["CREATE_SUBTASK", "IGNORE"]);
 const PRIORITY_ALLOW_LIST = new Set(["High", "Medium"]);
 
 function getGeminiModelFromEnv() {
@@ -8,32 +8,32 @@ function getGeminiModelFromEnv() {
 
 function getAssigneeAllowListFromEnv() {
   return [
-    process.env.JIRA_ASSIGNEE_Phuc_ID,
-    process.env.JIRA_ASSIGNEE_Tram_ID,
-    process.env.JIRA_ASSIGNEE_Vy_ID,
-  ].filter(Boolean);
+    { id: process.env.ASSIGNEE_Phuc_ID || process.env.JIRA_ASSIGNEE_Phuc_ID, name: 'Phuc' },
+    { id: process.env.ASSIGNEE_Tram_ID || process.env.JIRA_ASSIGNEE_Tram_ID, name: 'Tram' },
+    { id: process.env.ASSIGNEE_Vy_ID || process.env.JIRA_ASSIGNEE_Vy_ID, name: 'Vy' },
+  ].filter((a) => a.id);
 }
 
-function buildGeminiPrompt({ chatTranscript, jiraContext, assigneeAllowList }) {
+function buildGeminiPrompt({ chatTranscript, ticketsContext, assigneeAllowList }) {
   const assigneesBlock = assigneeAllowList.length
-    ? assigneeAllowList.map((id) => `- ${id}`).join("\n")
+    ? assigneeAllowList.map((a) => `- ${a.id}: ${a.name}`).join("\n")
     : "- (no assignee ids configured)";
 
   return [
     "HISTORY:",
     chatTranscript || "",
     "",
-    "EXISTING TASKS (CONTEXT):",
-    jiraContext || "No existing open tasks.",
+    "EXISTING TICKETS (CONTEXT):",
+    ticketsContext || "No existing open tickets.",
     "",
     "ROLE:",
     "You are the AdminOps Assistant for DantaLabs.",
-    "Your goal is to decide whether to create a new Jira subtask, add a comment to the existing parent issue, or ignore the message.",
+    "Your goal is to decide whether to create a new support ticket, or ignore the message.",
     "",
     "DECISION RULES:",
-    '1) If the user discusses a new topic not explicitly present in EXISTING TASKS, choose "CREATE_SUBTASK".',
-    '2) If the user discusses the exact same topic as an existing task (status update, reschedule, clarification), choose "COMMENT".',
-    '3) If the message is not actionable, choose "IGNORE".',
+    '1) If the user requests something actionable, choose "CREATE_SUBTASK".',
+    '2) If the message is not actionable (greeting, small talk, unclear), choose "IGNORE".',
+    "NOTE: We no longer use the COMMENT decision. Only CREATE_SUBTASK or IGNORE.",
     "",
     "ASSIGNEE RULES:",
     "You MUST choose assignee_id from this allow-list and output the id exactly:",
@@ -43,7 +43,7 @@ function buildGeminiPrompt({ chatTranscript, jiraContext, assigneeAllowList }) {
     "Return ONLY a single JSON object (no Markdown, no code fences, no extra text) that matches this schema:",
     JSON.stringify(
       {
-        decision: "CREATE_SUBTASK | COMMENT | IGNORE",
+        decision: "CREATE_SUBTASK | IGNORE",
         reason: "String",
         summary: "String",
         description: "String",
@@ -55,7 +55,7 @@ function buildGeminiPrompt({ chatTranscript, jiraContext, assigneeAllowList }) {
     ),
     "",
     "CONSTRAINTS:",
-    '- decision must be one of: "CREATE_SUBTASK", "COMMENT", "IGNORE".',
+    '- decision must be one of: "CREATE_SUBTASK", "IGNORE".',
     '- priority must be exactly: "High" or "Medium".',
     "- assignee_id must be exactly one of the allow-listed ids.",
     "- Do not include any other keys.",
@@ -270,31 +270,59 @@ async function callGemini({ apiKey, modelName, prompt }) {
   return response.text();
 }
 
-async function getAiDecision({ chatTranscript, jiraContext }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  const modelName = getGeminiModelFromEnv();
-  const assigneeAllowList = getAssigneeAllowListFromEnv();
-
-  if (!apiKey) {
-    return {
-      decisionPayload: safeIgnore({ reason: "GEMINI_API_KEY_MISSING", assigneeAllowList }),
-      error: { type: "AI_CONFIG_ERROR", message: "GEMINI_API_KEY is missing" },
-      rawText: "",
-    };
+async function callOllama({ baseUrl, modelName, prompt }) {
+  const axios = require('axios');
+  const endpoint = `${baseUrl.replace(/\/+$/, '')}/api/generate`;
+  
+  const response = await axios.post(endpoint, {
+    model: modelName,
+    prompt: prompt,
+    stream: false,
+    format: "json"
+  }, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120_000 // Local LLM might take longer
+  });
+  
+  if (!response.data || !response.data.response) {
+    throw new Error("Invalid response from Ollama");
   }
+  
+  return response.data.response;
+}
 
-  const prompt = buildGeminiPrompt({ chatTranscript, jiraContext, assigneeAllowList });
-
+async function getAiDecision({ chatTranscript, jiraContext }) {
+  const aiProvider = normalizeString(process.env.AI_PROVIDER).toLowerCase() || "gemini";
+  const assigneeAllowList = getAssigneeAllowListFromEnv();
+  const prompt = buildGeminiPrompt({ chatTranscript, ticketsContext: jiraContext, assigneeAllowList });
   let rawText = "";
+
   try {
-    rawText = await callGemini({ apiKey, modelName, prompt });
+    if (aiProvider === "ollama") {
+      const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+      const ollamaModel = process.env.OLLAMA_MODEL || "llama3";
+      rawText = await callOllama({ baseUrl: ollamaBaseUrl, modelName: ollamaModel, prompt });
+    } else {
+      const apiKey = process.env.GEMINI_API_KEY;
+      const modelName = getGeminiModelFromEnv();
+      
+      if (!apiKey) {
+        return {
+          decisionPayload: safeIgnore({ reason: "GEMINI_API_KEY_MISSING", assigneeAllowList }),
+          error: { type: "AI_CONFIG_ERROR", message: "GEMINI_API_KEY is missing" },
+          rawText: "",
+        };
+      }
+      
+      rawText = await callGemini({ apiKey, modelName, prompt });
+    }
   } catch (error) {
     const errorMessage = normalizeString(error?.message).slice(0, 500);
     return {
-      decisionPayload: safeIgnore({ reason: "GEMINI_CALL_FAILED", assigneeAllowList }),
+      decisionPayload: safeIgnore({ reason: `${aiProvider.toUpperCase()}_CALL_FAILED`, assigneeAllowList }),
       error: {
         type: "AI_CALL_ERROR",
-        message: errorMessage || "Gemini call failed",
+        message: errorMessage || `${aiProvider} call failed`,
       },
       rawText: "",
     };

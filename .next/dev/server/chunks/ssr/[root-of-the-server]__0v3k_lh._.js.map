@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 10, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/PC/Downloads/Trae%20SOLO%20YYDS/src/app/page.tsx"],"sourcesContent":["export default function DashboardIndex() {\n  return (\n    <main style={{ padding: '2rem' }}>\n      <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>Dashboard</h1>\n      <p style={{ color: 'var(--text-secondary)' }}>\n        Welcome to Ops Dashboard. Use the sidebar to navigate.\n      </p>\n    </main>\n  );\n}\n"],"names":["DashboardIndex","style","padding","fontSize","fontWeight","marginBottom","color"],"mappings":";;;;;;AAAe,SAASA;IACtB,qBACE,8OAAC;QAAKC,OAAO;YAAEC,SAAS;QAAO;;0BAC7B,8OAAC;gBAAGD,OAAO;oBAAEE,UAAU;oBAAUC,YAAY;oBAAKC,cAAc;gBAAS;0BAAG;;;;;;0BAC5E,8OAAC;gBAAEJ,OAAO;oBAAEK,OAAO;gBAAwB;0BAAG;;;;;;;;;;;;AAKpD"}}]
+}

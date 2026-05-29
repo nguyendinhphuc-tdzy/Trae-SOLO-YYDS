@@ -1,21 +1,34 @@
-const dotenv = require("dotenv");
-const express = require("express");
+// ==========================================
+// 1. LOAD ENVIRONMENT VARIABLES FIRST
+// ==========================================
+require('dotenv').config();
 
-const { validateEnv } = require("./src/env");
-const { isVipClient, shouldContinueForMessageId } = require("./src/services/supabaseService");
-const { createJiraService, sanitizeJiraLabel, formatJiraContext } = require("./src/services/jiraService");
-const { getAiDecision } = require("./src/services/aiService");
-const { createWhatsAppNotifyService } = require("./src/services/whatsappNotifyService");
-const { createGmailService } = require("./src/services/gmailService");
-const { formatSubtaskCreatedMessage } = require("./src/services/opsNotificationFormatter");
-const { startWhatsAppIngestion } = require("./src/services/whatsappIngestion");
+const express = require('express');
 
-dotenv.config();
+const { validateEnv } = require('./src/env');
+const { getAiDecision } = require('./src/services/aiService');
+const { startWhatsAppIngestion } = require('./src/services/whatsappIngestion');
+const { createWhatsAppNotifyService } = require('./src/services/whatsappNotifyService');
+const { createGmailService } = require('./src/services/gmailService');
+const {
+  isVipClient,
+  shouldContinueForMessageId,
+  upsertClient,
+  createTicket,
+  createConversation,
+  getOpenTicketContext,
+  logAnalyticsEvent,
+} = require('./src/services/supabaseService');
+
+// ==========================================
+// 2. VALIDATE ENVIRONMENT
+// ==========================================
 validateEnv();
 
 const app = express();
 
-app.get("/ping", (req, res) => {
+// Keep-alive for Render
+app.get('/ping', (req, res) => {
   res.status(200).json({ ok: true });
 });
 
@@ -25,21 +38,48 @@ app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
 
+// ==========================================
+// 3. NOTIFICATION SERVICES
+// ==========================================
+let waNotifyService = createWhatsAppNotifyService();
+const gmailService = createGmailService();
+
+const vipMode = (process.env.VIP_MODE || 'strict').trim().toLowerCase() || 'strict';
+const isVipClientForIngestion =
+  vipMode === 'allow_all' ? async () => true : isVipClient;
+
+// ==========================================
+// 4. PIPELINE
+// ==========================================
 function safeToString(value) {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
   return String(value);
+}
+
+function formatTicketCreatedMessage({ taskTitle, assigneeName, ticketId, reason, priority }) {
+  const lines = [
+    'NEW TICKET CREATED',
+    '',
+    `Task: ${taskTitle || 'N/A'}`,
+    `Assignee: ${assigneeName || 'Team'}`,
+    `Priority: ${priority || 'Medium'}`,
+    `Status: Open`,
+    '',
+    `Reason: ${reason || 'N/A'}`,
+  ];
+  return lines.join('\n');
 }
 
 function logError(type, error, context = {}) {
   const status = error?.response?.status;
   const responseData = error?.response?.data;
   const responseText =
-    typeof responseData === "string"
+    typeof responseData === 'string'
       ? responseData.slice(0, 1000)
       : responseData
         ? JSON.stringify(responseData).slice(0, 1000)
-        : "";
+        : '';
 
   const requestUrl = safeToString(error?.config?.url).slice(0, 300);
   const requestMethod = safeToString(error?.config?.method).slice(0, 20);
@@ -57,14 +97,6 @@ function logError(type, error, context = {}) {
   console.error(JSON.stringify(payload));
 }
 
-const jiraService = createJiraService();
-let waNotifyService = createWhatsAppNotifyService();
-const gmailService = createGmailService();
-
-const vipMode = safeToString(process.env.VIP_MODE).trim().toLowerCase() || "strict";
-const isVipClientForIngestion =
-  vipMode === "allow_all" ? async () => true : isVipClient;
-
 async function processInboundMessage(event) {
   const messageId = safeToString(event?.messageId).trim();
   const chatId = safeToString(event?.chatId).trim();
@@ -75,22 +107,33 @@ async function processInboundMessage(event) {
   const ctx = { messageId, chatId };
 
   try {
-    const label = sanitizeJiraLabel(senderName, chatId);
-
-    let issues = [];
+    // Upsert client record
     try {
-      issues = await jiraService.getOpenIssuesByLabel(label);
-    } catch (error) {
-      logError("jira_get_open_issues_failed", error, ctx);
-      issues = [];
+      await upsertClient({ chatId, displayName: senderName });
+    } catch (e) {
+      logError('client_upsert_failed', e, ctx);
     }
 
-    const jiraContext = formatJiraContext(issues);
-    const chatTranscript = inboundTranscript || `${senderName || chatId || "Unknown"}: ${text || ""}`;
+    // Get open tickets for context
+    const openTickets = await getOpenTicketContext(chatId);
 
-    const aiResult = await getAiDecision({ chatTranscript, jiraContext });
+    let ticketsContext = 'No existing open tickets.';
+    if (openTickets.length > 0) {
+      ticketsContext = openTickets
+        .map(
+          (t) =>
+            `- [${t.status}] ${t.summary || 'N/A'} (Priority: ${t.priority || 'N/A'}, Created: ${new Date(t.created_at).toLocaleDateString()})`
+        )
+        .join('\n');
+    }
+
+    const chatTranscript =
+      inboundTranscript || `${senderName || chatId || 'Unknown'}: ${text || ''}`;
+
+    // AI decision
+    const aiResult = await getAiDecision({ chatTranscript, jiraContext: ticketsContext });
     if (aiResult?.error) {
-      logError("ai_decision_error", aiResult.error, {
+      logError('ai_decision_error', aiResult.error, {
         ...ctx,
         aiErrorType: safeToString(aiResult.error.type).slice(0, 100),
       });
@@ -99,85 +142,108 @@ async function processInboundMessage(event) {
     const decisionPayload = aiResult?.decisionPayload;
     const decision = safeToString(decisionPayload?.decision).toUpperCase();
 
-    if (!decision || decision === "IGNORE") {
-      return { status: "ignored", reason: safeToString(decisionPayload?.reason).slice(0, 200) };
-    }
-
-    let parentIssue;
+    // Log conversation
     try {
-      parentIssue = await jiraService.findOrCreateParentIssue(label, senderName);
+      await createConversation({
+        chatId,
+        clientName: senderName,
+        messageId,
+        direction: 'inbound',
+        text,
+        aiDecision: decision,
+      });
+    } catch (e) {
+      logError('conversation_log_failed', e, ctx);
+    }
+
+    if (!decision || decision === 'IGNORE') {
+      await logAnalyticsEvent('conversation_ignored', { chatId, reason: decisionPayload?.reason });
+      return { status: 'ignored', reason: safeToString(decisionPayload?.reason).slice(0, 200) };
+    }
+
+    // Create ticket
+    let ticket;
+    try {
+      ticket = await createTicket({
+        chatId,
+        clientName: senderName,
+        summary: decisionPayload?.summary,
+        description: decisionPayload?.description,
+        priority: decisionPayload?.priority,
+        assigneeId: decisionPayload?.assignee_id,
+        assigneeName: null,
+        aiReason: decisionPayload?.reason,
+      });
     } catch (error) {
-      logError("jira_parent_issue_failed", error, ctx);
-      return { status: "error", step: "jira_parent" };
+      logError('ticket_create_failed', error, ctx);
+      return { status: 'error', step: 'ticket_create' };
     }
 
-    const parentKey = safeToString(parentIssue?.key).trim();
-    if (!parentKey) return { status: "error", step: "jira_parent_missing_key" };
+    const ticketId = ticket?.id;
+    const ticketSummary = ticket?.summary;
 
-    if (decision === "COMMENT") {
-      try {
-        await jiraService.addComment(parentKey, decisionPayload, chatTranscript);
-        return { status: "commented", parentKey };
-      } catch (error) {
-        logError("jira_add_comment_failed", error, ctx);
-        return { status: "error", step: "jira_comment" };
-      }
+    // Link conversation to ticket
+    try {
+      await createConversation({
+        chatId,
+        clientName: senderName,
+        messageId,
+        direction: 'inbound',
+        text: `[Ticket #${ticketId}] ${text}`,
+        aiDecision: decision,
+        ticketId,
+      });
+    } catch (e) {
+      // non-fatal
     }
 
-    if (decision === "CREATE_SUBTASK") {
-      let subtask;
-      try {
-        subtask = await jiraService.createSubtask(parentKey, decisionPayload);
-      } catch (error) {
-        logError("jira_create_subtask_failed", error, ctx);
-        return { status: "error", step: "jira_subtask" };
-      }
+    // Log analytics
+    await logAnalyticsEvent('ticket_created', {
+      chatId,
+      ticketId,
+      priority: decisionPayload?.priority,
+      decision,
+    });
 
-      try {
-        const messageText = formatSubtaskCreatedMessage({
-          taskTitle: subtask?.fields?.summary,
-          assigneeName: subtask?.fields?.assignee?.displayName || "Team",
-          jiraKey: subtask?.key,
-          jiraBaseUrl: jiraService.baseUrl,
-          reason: safeToString(decisionPayload?.reason).slice(0, 1000),
-          priority: safeToString(decisionPayload?.priority).slice(0, 50),
-        });
-        await waNotifyService.sendMessage(messageText);
-      } catch (error) {
-        logError("whatsapp_notify_failed", error, ctx);
-      }
-
-      try {
-        const jiraKey = safeToString(subtask?.key).trim();
-        const summary = safeToString(subtask?.fields?.summary).trim();
-        const subject = jiraKey
-          ? `New Jira subtask created: ${jiraKey}${summary ? ` - ${summary}` : ""}`
-          : "New Jira subtask created";
-
-        const messageText = formatSubtaskCreatedMessage({
-          taskTitle: subtask?.fields?.summary,
-          assigneeName: subtask?.fields?.assignee?.displayName || "Team",
-          jiraKey: subtask?.key,
-          jiraBaseUrl: jiraService.baseUrl,
-          reason: safeToString(decisionPayload?.reason).slice(0, 1000),
-          priority: safeToString(decisionPayload?.priority).slice(0, 50),
-        });
-
-        await gmailService.sendMail({ subject, text: messageText });
-      } catch (error) {
-        logError("gmail_notify_failed", error, ctx);
-      }
-
-      return { status: "subtask_created", jiraKey: safeToString(subtask?.key).trim(), parentKey };
+    // WhatsApp notification
+    try {
+      const msgText = formatTicketCreatedMessage({
+        taskTitle: ticketSummary,
+        assigneeName: 'Team',
+        ticketId,
+        reason: safeToString(decisionPayload?.reason).slice(0, 1000),
+        priority: safeToString(decisionPayload?.priority).slice(0, 50),
+      });
+      await waNotifyService.sendMessage(msgText);
+    } catch (error) {
+      logError('whatsapp_notify_failed', error, ctx);
     }
 
-    return { status: "ignored", reason: "UNKNOWN_DECISION" };
+    // Gmail notification
+    try {
+      const subject = ticketId ? `New ticket created: #${ticketId}` : 'New ticket created';
+      const msgText = formatTicketCreatedMessage({
+        taskTitle: ticketSummary,
+        assigneeName: 'Team',
+        ticketId,
+        reason: safeToString(decisionPayload?.reason).slice(0, 1000),
+        priority: safeToString(decisionPayload?.priority).slice(0, 50),
+      });
+      await gmailService.sendMail({ subject, text: msgText });
+    } catch (error) {
+      logError('gmail_notify_failed', error, ctx);
+    }
+
+    return { status: 'ticket_created', ticketId, ticketSummary };
   } catch (error) {
-    logError("process_inbound_message_failed", error, ctx);
-    return { status: "error", step: "pipeline" };
+    logError('process_inbound_message_failed', error, ctx);
+    return { status: 'error', step: 'pipeline' };
   }
 }
 
+// ==========================================
+// 5. START WHATSAPP LISTENER
+// ==========================================
 try {
   const { client } = startWhatsAppIngestion({
     authPath: process.env.WA_AUTH_PATH,
@@ -187,5 +253,5 @@ try {
   });
   waNotifyService = createWhatsAppNotifyService({ client });
 } catch (error) {
-  logError("whatsapp_init_failed", error);
+  logError('whatsapp_init_failed', error);
 }
