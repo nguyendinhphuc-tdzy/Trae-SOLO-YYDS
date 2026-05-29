@@ -326,7 +326,7 @@ Vai trò & cách hoạt động:
     - Supabase cho conversation metrics.
     - Nếu chart theo Jira assignee: backend có thể join từ mapping jira keys (Supabase) + batch fetch Jira (realtime) để lấy assignee hiện tại.
 - “Attention Needed” list
-  - Vai trò: “to-do list tự động” để Ops xử lý lỗi/điểm nóng trước.
+  - Vai trò: “to-do list tự động” phân tích kết quả task tuần này generate ra to do list cho tuần sau
   - Chức năng: liệt kê top N items theo ưu tiên.
   - Hành vi:
     - Mỗi item click → mở Conversation detail.
